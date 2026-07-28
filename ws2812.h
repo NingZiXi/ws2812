@@ -1,77 +1,74 @@
 /**
  * @file    ws2812.h
- * @author  宁子希 (1589326497@qq.com)
- * @brief   WS2812 LED 驱动，C++ 类 API。SPI+DMA 时序，TIM ISR 翻相。
- * @date    2026-07-24
- *
- * @copyright Copyright (c) 2026
- *
+ * @brief   WS2812 LED 驱动头文件,定义 C API。
  */
-
-#pragma once
+#ifndef WS2812_H
+#define WS2812_H
 
 #include <stdint.h>
 #include "stm32g0xx_hal.h"
 
-namespace ws2812 {
+typedef struct {
+    uint8_t g;       // 绿
+    uint8_t r;       // 红
+    uint8_t b;       // 蓝
+} ws2812_color_t;
 
-enum class Status : uint8_t {
-    OK      = 0,
-    ERR_NULL,
-    ERR_BUSY,
-    ERR_COUNT,
-};
+typedef enum {
+    WS2812_OK       = 0,
+    WS2812_ERR_NULL = 1,
+    WS2812_ERR_BUSY = 2,
+} ws2812_status_t;
 
-struct Color {
-    uint8_t g, r, b;
+typedef struct {
+    SPI_HandleTypeDef *hspi;   // SPI 句柄,需 1LINE 方向、Mode 0、MSB 先发、≤6.4 MHz
+    TIM_HandleTypeDef *htim;   // 翻相定时器
+    uint16_t count;            // LED 数量
+    uint8_t phase;             // 当前相位:0=亮,1=灭
+    ws2812_color_t cur_color;  // 当前颜色
+    uint8_t *tx_buf;           // 编码后缓冲
+    volatile uint8_t dma_busy; // 1=正在 DMA 发送
+    uint8_t installed;         // 1=已通过 ws2812_install 注册
+} ws2812_t;
 
-    constexpr Color() : g(0), r(0), b(0) {}
-    constexpr Color(uint8_t r_, uint8_t g_, uint8_t b_) : g(g_), r(r_), b(b_) {}
+/**
+ * @brief 初始化、分配缓冲、接管 TIM/SPI 中断回调
+ *
+ * 库内部覆盖 HAL_TIM_PeriodElapsedCallback 与 HAL_SPI_TxCpltCallback,
+ * app 不需要再写 weak 回调。
+ *
+ * @param  self   句柄
+ * @param  hspi   SPI 句柄
+ * @param  htim   TIM 句柄
+ * @param  count  LED 数量
+ * @return WS2812_OK / WS2812_ERR_NULL
+ */
+ws2812_status_t ws2812_install(ws2812_t *self, SPI_HandleTypeDef *hspi, TIM_HandleTypeDef *htim, uint16_t count);
 
-    static constexpr Color Black() { return Color(0, 0, 0); }
-    static constexpr Color Red()   { return Color(255, 0, 0); }
-    static constexpr Color Green() { return Color(0, 255, 0); }
-    static constexpr Color Blue()  { return Color(0, 0, 255); }
-};
+/**
+ * @brief 反注册、释放缓冲、停定时器
+ *
+ * @param  self  句柄
+ */
+void ws2812_uninstall(ws2812_t *self);
 
-class WS2812 {
-public:
-    WS2812(SPI_HandleTypeDef *hspi, uint16_t led_count = 1);
-    ~WS2812();
+/**
+ * @brief 发送一次亮色并停止翻相(常亮)
+ *
+ * @param  self  句柄
+ * @param  c     颜色
+ * @return WS2812_OK / WS2812_ERR_BUSY / WS2812_ERR_NULL
+ */
+ws2812_status_t ws2812_effect_solid(ws2812_t *self, ws2812_color_t c);
 
-    WS2812(const WS2812&) = delete;
-    WS2812& operator=(const WS2812&) = delete;
+/**
+ * @brief 启动闪烁:立即发送一次亮色,之后 TIM 每 period_ms 翻相
+ *
+ * @param  self       句柄
+ * @param  c          闪烁颜色
+ * @param  period_ms  半周期(亮 / 灭 各持续这么久)
+ * @return WS2812_OK / WS2812_ERR_BUSY / WS2812_ERR_NULL
+ */
+ws2812_status_t ws2812_effect_blink(ws2812_t *self, ws2812_color_t c, uint32_t period_ms);
 
-    Status setPixel(uint16_t i, Color c);
-    Status setPixels(const Color *arr, uint16_t n);
-    Status clear();
-    Status show();
-
-    Status attachTimer(TIM_HandleTypeDef *htim);
-    Status detachTimer();
-    Status effectOff();
-    Status effectSolid(Color c);
-    Status effectBlink(Color c, uint32_t period_ms);
-
-    uint16_t count()          const { return _count; }
-    TIM_HandleTypeDef *htim() const { return _htim; }
-
-    void onTimTick();
-
-private:
-    SPI_HandleTypeDef *_hspi;
-    TIM_HandleTypeDef *_htim;
-    uint16_t _count;
-    Color  *_buf;
-    uint8_t *_tx_buf;
-
-    enum Mode : uint8_t { OFF = 0, SOLID, BLINK };
-    Mode _mode;
-    Color _color;
-    uint8_t _phase;
-
-    void encodePixel(uint16_t i, uint8_t *out15) const;
-    Status sendFrameBlocking();
-};
-
-} // namespace ws2812
+#endif

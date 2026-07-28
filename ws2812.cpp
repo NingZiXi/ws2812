@@ -14,7 +14,8 @@
 
 namespace ws2812 {
 
-static const uint8_t k_pat[2] = { 0x18, 0x1C };   // 0b11000 / 0b11100, MSB 在 bit 4
+static const uint8_t k_pat[2] = { 0x10, 0x1C };   // 0b10000 / 0b11100, MSB 在 bit 4
+static const uint16_t kResetBytes = 150;            // 150B × 8b × 250ns = 300μs 复位低电平
 
 static constexpr uint8_t kMaxInstances = 4;
 static WS2812 *s_instances[kMaxInstances] = {nullptr};
@@ -38,7 +39,8 @@ WS2812::WS2812(SPI_HandleTypeDef *hspi, uint16_t led_count)
     if (hspi == nullptr || led_count == 0) return;
 
     _buf    = new Color[led_count];
-    _tx_buf = new uint8_t[15 * led_count];
+    _tx_buf = new uint8_t[15 * led_count + kResetBytes];
+    memset(_tx_buf, 0, 15 * led_count + kResetBytes);
 
     if (_buf == nullptr || _tx_buf == nullptr) {
         delete[] _buf;
@@ -83,14 +85,13 @@ Status WS2812::sendFrameBlocking() {
         encodePixel(i, _tx_buf + i * 15);
     }
 
-    uint16_t total = _count * 15;
+    uint16_t total = _count * 15 + kResetBytes;
     if (HAL_SPI_Transmit_DMA(_hspi, _tx_buf, total) != HAL_OK) {
         return Status::ERR_BUSY;
     }
     while (_hspi->State != HAL_SPI_STATE_READY) {
         __WFI();
     }
-    HAL_Delay(1);
     return Status::OK;
 }
 
@@ -193,7 +194,7 @@ void WS2812::onTimTick() {
     for (uint16_t i = 0; i < _count; i++) {
         encodePixel(i, _tx_buf + i * 15);
     }
-    HAL_SPI_Transmit_DMA(_hspi, _tx_buf, _count * 15);
+    HAL_SPI_Transmit_DMA(_hspi, _tx_buf, _count * 15 + kResetBytes);
 }
 
 } // namespace ws2812
